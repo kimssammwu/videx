@@ -1,0 +1,6 @@
+# Native Python UI uses tkinter, which is included in Windows Python installers.
+# Do not install both opencv-python and opencv-python-headless in the same venv.
+numpy>=1.26,<3
+opencv-python-headless>=4.9,<5
+pyserial>=3.5,<4
+pyttsx3>=2.98,<3

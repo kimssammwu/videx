@@ -1,5 +1,11 @@
 # ESP32-S3 USB 이미지 뷰어
 
+> **노트북 통합 실행:** 이제 `python viewer.py`는 PC용 VIDEX 창을 엽니다.
+> Flood Fill 장애물 감지, 글씨 API, 물체 API, 지속 모드와 PC 음성을 한 프로세스에서 실행합니다.
+> 설치 및 조작은 [노트북 독립 실행 안내](../README-DESKTOP.md)를 참고하세요.
+> 아래는 기존 OpenCV 수신 전용 뷰어와 펌웨어 프로토콜 설명입니다.
+> 기존 화면은 proxy 폴더에서 `python -c "from viewer import legacy_main; legacy_main()" --port COM5`로 실행합니다.
+
 `main/main.c`의 native USB CDC 출력(CAM2 헤더 + JPEG)을 수신하여
 카메라 0(LEFT), 카메라 1(RIGHT)을 한 창에 표시합니다.
 수신/디코딩은 별도 스레드에서 실행하고 화면에는 각 카메라의 최신 프레임을 표시합니다.
@@ -82,7 +88,7 @@ S3는 카메라 재접속 시 최근 요청을 다시 보내며 기본 모드는
 3 모드는 제거했으며 binary 3 또는 ASCII '3'은 무시합니다.
 
 ```bash
-python viewer.py --port /dev/ttyACM0 --resolution 0
+python -c "from viewer import legacy_main; legacy_main()" --port /dev/ttyACM0 --resolution 0
 ```
 
 뷰어 창에서 숫자 키 `0`, `1`, `2`로 전환합니다. `--resolution 2`로 시작할 수도 있습니다.
