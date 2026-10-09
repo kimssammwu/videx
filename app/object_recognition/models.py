@@ -37,11 +37,16 @@ class FramePacket:
 class RecognitionConfig:
     """Thresholds are deliberately configurable for real-camera calibration."""
 
-    roi_fraction: float = 0.60
+    roi_fraction: float = 1.0
     analysis_width: int = 160
     frame_check_interval: float = 0.10
     stable_duration: float = 1.0
-    motion_threshold: float = 0.025
+    motion_threshold: float = 0.040
+    motion_reset_threshold: float = 0.100
+    stability_window: float = 1.0
+    stable_ratio: float = 0.80
+    stability_exit_ratio: float = 0.60
+    max_frame_gap: float = 0.35
     rotation_threshold: float = 0.10
     duplicate_threshold: float = 0.055
     min_sharpness: float = 45.0
@@ -62,8 +67,12 @@ class RecognitionConfig:
             raise ValueError("analysis_width must be at least 16")
         if self.frame_check_interval < 0 or self.stable_duration < 0:
             raise ValueError("time thresholds cannot be negative")
-        if not 0 <= self.motion_threshold <= 1:
-            raise ValueError("motion_threshold must be in [0, 1]")
+        if not 0 < self.motion_threshold < self.motion_reset_threshold <= 1:
+            raise ValueError("motion thresholds must satisfy 0 < motion < reset <= 1")
+        if self.stability_window <= 0 or self.max_frame_gap <= 0:
+            raise ValueError("stability_window and max_frame_gap must be positive")
+        if not 0 <= self.stability_exit_ratio <= self.stable_ratio <= 1:
+            raise ValueError("stability ratios must satisfy 0 <= exit <= enter <= 1")
         if not 0 <= self.rotation_threshold <= 1:
             raise ValueError("rotation_threshold must be in [0, 1]")
         if not 0 <= self.duplicate_threshold <= 1:
@@ -87,6 +96,9 @@ class FrameMetrics:
     stable: bool
     selected: bool
     reason: str
+    stability_ratio: float | None = None
+    stability_progress: float = 0.0
+    stable_seconds: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -99,4 +111,7 @@ class FrameMetrics:
             "stable": self.stable,
             "selected": self.selected,
             "reason": self.reason,
+            "stability_ratio": self.stability_ratio,
+            "stability_progress": self.stability_progress,
+            "stable_seconds": self.stable_seconds,
         }

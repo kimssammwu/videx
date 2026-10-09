@@ -22,6 +22,7 @@ from .image_ops import (
     sharpness_score,
 )
 from .models import FrameMetrics, FramePacket, RecognitionConfig, RecognitionState
+from .stability import StabilitySnapshot, TimeWeightedStability
 
 LOGGER = logging.getLogger("videx.object_recognition")
 LOGGER.addHandler(logging.NullHandler())
@@ -59,6 +60,16 @@ class ObjectRecognizer:
         self.front_gray: np.ndarray | None = None
         self.last_check_at: float | None = None
         self.stable_since: float | None = None
+        self.stability = TimeWeightedStability(
+            motion_threshold=self.config.motion_threshold,
+            reset_threshold=self.config.motion_reset_threshold,
+            window_seconds=self.config.stability_window,
+            required_seconds=self.config.stable_duration,
+            enter_ratio=self.config.stable_ratio,
+            exit_ratio=self.config.stability_exit_ratio,
+            max_frame_gap=self.config.max_frame_gap,
+        )
+        self.last_stability = StabilitySnapshot(0.0, 0.0, 0.0, False, False, False, False, False)
         self.phase_started_at: float | None = None
         self.candidates: list[_Candidate] = []
         self.last_valid_candidate: _Candidate | None = None
@@ -108,6 +119,7 @@ class ObjectRecognizer:
         self.result = None
         self.previous_gray = None
         self.stable_since = None
+        self.stability.reset()
         self.candidates.clear()
         now = time.monotonic()
         if self.front_path is None:
@@ -205,6 +217,7 @@ class ObjectRecognizer:
                 self.previous_gray = gray
                 self.last_check_at = now
                 self.stable_since = None
+                self.stability.reset()
                 self.candidates.clear()
                 self._set_state(RecognitionState.WAIT_BACK, now)
                 reason = "rotation_detected"
@@ -226,19 +239,37 @@ class ObjectRecognizer:
                 "check_interval",
             )
 
+        previous_check_at = self.last_check_at
         motion = normalized_difference(self.previous_gray, gray) if self.previous_gray is not None else None
         self.previous_gray = gray
         self.last_check_at = now
-        stable = motion is not None and motion <= self.config.motion_threshold
-        if not stable:
+        if motion is None or previous_check_at is None:
+            self.stability.reset()
+            self.last_stability = StabilitySnapshot(
+                0.0, 0.0, 0.0, False, False, False, False, False
+            )
             self.stable_since = None
             self.candidates.clear()
-            reason = "moving" if motion is not None else "first_frame"
+            reason = "first_frame"
         else:
-            if self.stable_since is None:
-                self.stable_since = now
+            snapshot = self.stability.add(previous_check_at, now, motion)
+            self.last_stability = snapshot
+            if snapshot.large_motion or snapshot.frame_gap:
+                self.stable_since = None
                 self.candidates.clear()
-            if quality_ok and (
+                reason = "large_motion" if snapshot.large_motion else "frame_gap"
+            elif not snapshot.stable and snapshot.stable_ratio < self.config.stability_exit_ratio:
+                self.stable_since = None
+                self.candidates.clear()
+                reason = "moving" if not snapshot.current_stable else "stabilizing"
+            else:
+                self.stable_since = now - snapshot.covered_seconds
+                reason = "stabilizing"
+
+            can_add_candidate = snapshot.current_stable and not (
+                snapshot.large_motion or snapshot.frame_gap
+            )
+            if can_add_candidate and quality_ok and (
                 self.state is not RecognitionState.WAIT_BACK
                 or side_difference is None
                 or side_difference >= self.config.duplicate_threshold
@@ -248,13 +279,23 @@ class ObjectRecognizer:
                 self.candidates.append(candidate)
                 self.candidates.sort(key=lambda item: item.sharpness, reverse=True)
                 del self.candidates[self.config.max_candidates :]
-                reason = "candidate"
-            elif not quality_ok:
+                reason = "candidate" if snapshot.ready else "stabilizing"
+            elif can_add_candidate and not quality_ok:
                 reason = "quality_rejected"
-            else:
+            elif can_add_candidate:
                 reason = "duplicate_rejected"
+            elif (
+                not snapshot.current_stable
+                and snapshot.stable_ratio + 1e-9 >= self.config.stability_exit_ratio
+            ):
+                reason = "noise_tolerated"
 
-            if now - self.stable_since >= self.config.stable_duration and self.candidates:
+            if (
+                snapshot.ready
+                and snapshot.current_stable
+                and quality_ok
+                and self.candidates
+            ):
                 best = self.candidates[0]
                 if self.state is RecognitionState.WAIT_FRONT:
                     self._select_front(best, now)
@@ -269,10 +310,23 @@ class ObjectRecognizer:
                     True,
                     True,
                     "selected",
+                    snapshot.stable_ratio,
+                    snapshot.progress,
+                    snapshot.covered_seconds,
                 )
 
         return self._metrics(
-            packet.frame_id, sharpness, brightness, motion, side_difference, stable, False, reason
+            packet.frame_id,
+            sharpness,
+            brightness,
+            motion,
+            side_difference,
+            self.last_stability.stable,
+            False,
+            reason,
+            self.last_stability.stable_ratio,
+            self.last_stability.progress,
+            self.last_stability.covered_seconds,
         )
 
     def _manual_capture(
@@ -328,6 +382,7 @@ class ObjectRecognizer:
         now = time.monotonic() if timestamp is None else timestamp
         self.previous_gray = None
         self.stable_since = None
+        self.stability.reset()
         self.candidates.clear()
         self._set_state(RecognitionState.WAIT_ROTATION, now)
 
@@ -395,6 +450,9 @@ class ObjectRecognizer:
         stable: bool,
         selected: bool,
         reason: str,
+        stability_ratio: float | None = None,
+        stability_progress: float = 0.0,
+        stable_seconds: float = 0.0,
     ) -> FrameMetrics:
         metrics = FrameMetrics(
             frame_id,
@@ -406,10 +464,14 @@ class ObjectRecognizer:
             stable,
             selected,
             reason,
+            stability_ratio,
+            stability_progress,
+            stable_seconds,
         )
         LOGGER.info(
             "frame=%s state=%s motion=%s sharpness=%.2f brightness=%.2f "
-            "side_difference=%s stable=%s selected=%s reason=%s",
+            "side_difference=%s stable=%s stability_ratio=%s progress=%.0f%% "
+            "selected=%s reason=%s",
             frame_id,
             self.state.value,
             "-" if motion is None else f"{motion:.4f}",
@@ -417,6 +479,8 @@ class ObjectRecognizer:
             brightness,
             "-" if side_difference is None else f"{side_difference:.4f}",
             stable,
+            "-" if stability_ratio is None else f"{stability_ratio:.3f}",
+            stability_progress * 100,
             selected,
             reason,
         )

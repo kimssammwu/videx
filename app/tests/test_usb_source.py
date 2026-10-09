@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import importlib.util
+import struct
+import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import cv2
 import numpy as np
@@ -12,13 +16,18 @@ from object_recognition.image_ops import encode_jpeg
 from object_recognition.models import RecognitionConfig, RecognitionState
 from object_recognition.recognizer import ObjectRecognizer
 from object_recognition.usb_source import (
+    BUTTON_CLASSIFIED,
+    BUTTON_PRESSED,
+    BUTTON_VALID,
     CAM2_HEADER,
     CAM2_MAGIC,
+    STREAM_PAUSED,
     Cam2Frame,
     Cam2FrameParser,
     UsbCameraSource,
     UsbCameraError,
     cam2_frame_to_packet,
+    resolution_command,
 )
 
 
@@ -36,12 +45,19 @@ def cam2_bytes(
     camera_id: int,
     frame_id: int,
     timestamp_us: int,
+    *,
+    flags: int = 0,
+    button_result: int = 0,
+    reserved: int = 0,
 ) -> bytes:
     jpeg = encode_jpeg(image)
     height, width = image.shape[:2]
     header = CAM2_HEADER.pack(
         int.from_bytes(CAM2_MAGIC, "little"),
         camera_id,
+        flags,
+        button_result,
+        reserved,
         frame_id,
         len(jpeg),
         width,
@@ -55,6 +71,7 @@ class FakeSerial:
     def __init__(self, data: bytes) -> None:
         self.data = bytearray(data)
         self.closed = False
+        self.writes: list[bytes] = []
 
     @property
     def in_waiting(self) -> int:
@@ -65,11 +82,95 @@ class FakeSerial:
         del self.data[:size]
         return chunk
 
+    def write(self, data: bytes) -> int:
+        self.writes.append(data)
+        return len(data)
+
     def close(self) -> None:
         self.closed = True
 
 
 class UsbSourceTests(unittest.TestCase):
+    def test_old_reserved_header_remains_compatible(self) -> None:
+        image = product_image()
+        jpeg = encode_jpeg(image)
+        old_header = struct.Struct("<IB3xIIHHQ")
+        raw = old_header.pack(
+            int.from_bytes(CAM2_MAGIC, "little"),
+            1,
+            7,
+            len(jpeg),
+            image.shape[1],
+            image.shape[0],
+            123_000,
+        ) + jpeg
+        frames = Cam2FrameParser().feed(raw, now=2.0)
+        self.assertEqual(len(frames), 1)
+        self.assertEqual(frames[0].camera_id, 1)
+        self.assertEqual(frames[0].flags, 0)
+        self.assertIsNone(frames[0].button_pressed)
+
+    def test_new_header_preserves_left_button_metadata(self) -> None:
+        raw = cam2_bytes(
+            product_image(),
+            0,
+            8,
+            456_000,
+            flags=BUTTON_PRESSED | BUTTON_VALID | BUTTON_CLASSIFIED,
+            button_result=1,
+        )
+        frame = Cam2FrameParser().feed(raw, now=3.0)[0]
+        self.assertEqual(frame.flags, 7)
+        self.assertTrue(frame.button_pressed)
+        self.assertTrue(frame.button_classified)
+        self.assertEqual(frame.button_result, "SHORT")
+
+    def test_app_parser_matches_latest_proxy_viewer(self) -> None:
+        viewer_path = Path(__file__).resolve().parents[2] / "proxy" / "viewer.py"
+        spec = importlib.util.spec_from_file_location("videx_proxy_viewer_test", viewer_path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        with patch.dict(sys.modules, {spec.name: module}):
+            spec.loader.exec_module(module)
+
+        raw = cam2_bytes(
+            product_image(),
+            0,
+            9,
+            789_000,
+            flags=BUTTON_VALID | BUTTON_CLASSIFIED,
+            button_result=2,
+        )
+        app_frame = Cam2FrameParser().feed(raw, now=4.0)[0]
+        viewer_frame = module.FrameParser().feed(raw, now=4.0)[0]
+        self.assertEqual(
+            (
+                app_frame.camera_id,
+                app_frame.frame_id,
+                app_frame.width,
+                app_frame.height,
+                app_frame.timestamp_us,
+                app_frame.button_pressed,
+                app_frame.button_classified,
+                app_frame.button_result,
+                app_frame.jpeg,
+                app_frame.paused,
+            ),
+            (
+                viewer_frame.camera_id,
+                viewer_frame.frame_id,
+                viewer_frame.width,
+                viewer_frame.height,
+                viewer_frame.timestamp_us,
+                viewer_frame.button_pressed,
+                viewer_frame.button_classified,
+                viewer_frame.button_result,
+                viewer_frame.jpeg,
+                viewer_frame.paused,
+            ),
+        )
+
     def test_parser_handles_noise_split_reads_and_multiple_frames(self) -> None:
         first = cam2_bytes(product_image(False), 0, 10, 111_000)
         second = cam2_bytes(product_image(True), 1, 11, 222_000)
@@ -89,6 +190,47 @@ class UsbSourceTests(unittest.TestCase):
         frames = parser.feed(raw, now=1.2)
         self.assertEqual(len(frames), 1)
         self.assertEqual(frames[0].frame_id, 1)
+
+    def test_invalid_header_and_damaged_jpeg_recover_to_next_frame(self) -> None:
+        image = product_image()
+        jpeg = encode_jpeg(image)
+        invalid_header = CAM2_HEADER.pack(
+            int.from_bytes(CAM2_MAGIC, "little"),
+            1,
+            0,
+            0,
+            1,
+            1,
+            len(jpeg),
+            image.shape[1],
+            image.shape[0],
+            1,
+        ) + jpeg
+        damaged = CAM2_HEADER.pack(
+            int.from_bytes(CAM2_MAGIC, "little"), 1, 0, 0, 0, 2, 4, 1, 1, 2
+        ) + b"nope"
+        valid = cam2_bytes(image, 1, 3, 3)
+        frames = Cam2FrameParser().feed(invalid_header + damaged + valid, now=1.0)
+        self.assertEqual([frame.frame_id for frame in frames], [3])
+
+    def test_stream_paused_is_metadata_not_a_jpeg(self) -> None:
+        raw = CAM2_HEADER.pack(
+            int.from_bytes(CAM2_MAGIC, "little"),
+            1,
+            STREAM_PAUSED,
+            0,
+            0,
+            55,
+            0,
+            0,
+            0,
+            999,
+        )
+        frame = Cam2FrameParser().feed(raw, now=5.0)[0]
+        self.assertTrue(frame.paused)
+        self.assertEqual(frame.jpeg, b"")
+        with self.assertRaisesRegex(ValueError, "STREAM_PAUSED"):
+            cam2_frame_to_packet(frame)
 
     def test_packet_uses_pc_monotonic_time_not_esp_timestamp(self) -> None:
         image = product_image()
@@ -120,7 +262,7 @@ class UsbSourceTests(unittest.TestCase):
 
         source = UsbCameraSource(
             "COM_TEST",
-            1,
+            0,
             serial_factory=factory,
             clock=lambda: 5.0,
         )
@@ -128,9 +270,165 @@ class UsbSourceTests(unittest.TestCase):
             packets = source.poll()
         self.assertTrue(fake.closed)
         self.assertEqual(len(packets), 1)
-        self.assertEqual(packets[0].camera_id, "1")
-        self.assertEqual(packets[0].frame_id, 2)
+        self.assertEqual(packets[0].camera_id, "0")
+        self.assertEqual(packets[0].frame_id, 1)
         self.assertEqual(source.stats.other_camera_frames, 1)
+        self.assertEqual(fake.writes, [resolution_command(1)])
+        self.assertEqual(source.resolution_request_status, "sent_unconfirmed")
+
+    def test_right_frame_is_filtered_before_jpeg_decode(self) -> None:
+        stream = cam2_bytes(product_image(), 0, 1, 10) + cam2_bytes(
+            product_image(True), 1, 2, 20
+        )
+        fake = FakeSerial(stream)
+
+        def factory(_port: str, **_kwargs: object) -> FakeSerial:
+            return fake
+
+        from object_recognition import usb_source
+
+        original = usb_source.cam2_frame_to_packet
+        with patch(
+            "object_recognition.usb_source.cam2_frame_to_packet",
+            wraps=original,
+        ) as convert:
+            with UsbCameraSource(
+                "COM_TEST",
+                0,
+                serial_factory=factory,
+                clock=lambda: 5.0,
+            ) as source:
+                packets = source.poll()
+        self.assertEqual([packet.camera_id for packet in packets], ["0"])
+        self.assertEqual(convert.call_count, 1)
+        self.assertEqual(convert.call_args.args[0].camera_id, 0)
+        self.assertEqual(source.stats.other_camera_frames, 1)
+
+    def test_right_pause_is_excluded_from_left_recognition(self) -> None:
+        paused = CAM2_HEADER.pack(
+            int.from_bytes(CAM2_MAGIC, "little"),
+            1,
+            STREAM_PAUSED,
+            0,
+            0,
+            7,
+            0,
+            0,
+            0,
+            700,
+        )
+        left = cam2_bytes(product_image(), 0, 8, 800)
+        fake = FakeSerial(paused + left)
+        from object_recognition import usb_source
+
+        with patch(
+            "object_recognition.usb_source.cam2_frame_to_packet",
+            wraps=usb_source.cam2_frame_to_packet,
+        ) as convert:
+            with UsbCameraSource(
+                "COM_TEST",
+                0,
+                serial_factory=lambda *_args, **_kwargs: fake,
+                clock=lambda: 6.0,
+            ) as source:
+                packets = source.poll()
+        self.assertEqual([packet.camera_id for packet in packets], ["0"])
+        self.assertEqual(convert.call_count, 1)
+        self.assertEqual(convert.call_args.args[0].camera_id, 0)
+        self.assertTrue(source.last_frame_info_by_camera[1].paused)
+        self.assertEqual(source.stats.other_camera_frames, 1)
+
+    def test_default_mode1_command_and_left_actual_resolution(self) -> None:
+        image = cv2.resize(product_image(), (640, 480), interpolation=cv2.INTER_CUBIC)
+        fake = FakeSerial(cam2_bytes(image, 0, 1, 1000))
+        with UsbCameraSource(
+            "COM_TEST",
+            0,
+            serial_factory=lambda *_args, **_kwargs: fake,
+            clock=lambda: 8.0,
+        ) as source:
+            while fake.data:
+                source.poll()
+            self.assertEqual(source.resolution_mode, 1)
+            self.assertEqual(source.selected_actual_resolution, (640, 480))
+            self.assertEqual(source.selected_resolution_status, "actual_matches_request")
+        self.assertEqual(fake.writes, [resolution_command(1)])
+
+    def test_reopening_usb_requests_mode1_again(self) -> None:
+        connections = [FakeSerial(b""), FakeSerial(b"")]
+
+        def factory(_port: str, **_kwargs: object) -> FakeSerial:
+            return connections.pop(0)
+
+        first, second = connections
+        source = UsbCameraSource("COM_TEST", 0, serial_factory=factory)
+        source.open()
+        source.close()
+        source.open()
+        source.close()
+        self.assertEqual(first.writes, [resolution_command(1)])
+        self.assertEqual(second.writes, [resolution_command(1)])
+
+    def test_resolution_mismatch_logs_warning_after_repeated_frames(self) -> None:
+        stream = b"".join(
+            cam2_bytes(product_image(), 0, frame_id, frame_id * 1000)
+            for frame_id in range(1, 4)
+        )
+        fake = FakeSerial(stream)
+        with UsbCameraSource(
+            "COM_TEST",
+            0,
+            serial_factory=lambda *_args, **_kwargs: fake,
+            clock=lambda: 9.0,
+        ) as source:
+            with self.assertLogs("videx.object_recognition.usb", level="WARNING") as logs:
+                source.poll()
+        self.assertEqual(source.selected_actual_resolution, (160, 120))
+        self.assertEqual(source.selected_resolution_status, "actual_mismatch")
+        self.assertIn("Requested resolution was not applied", "\n".join(logs.output))
+
+    def test_resolution_write_failure_keeps_legacy_stream_available(self) -> None:
+        class LegacySerial(FakeSerial):
+            def write(self, data: bytes) -> int:
+                raise OSError("control endpoint unsupported")
+
+        fake = LegacySerial(cam2_bytes(product_image(), 0, 1, 10))
+        with self.assertLogs("videx.object_recognition.usb", level="WARNING"):
+            with UsbCameraSource(
+                "COM_TEST",
+                0,
+                serial_factory=lambda *_args, **_kwargs: fake,
+                serial_exceptions=(OSError,),
+                clock=lambda: 7.0,
+            ) as source:
+                packets = source.poll()
+        self.assertEqual(len(packets), 1)
+        self.assertEqual(source.resolution_request_status, "failed")
+
+    def test_source_emits_both_cameras_from_one_serial_connection(self) -> None:
+        stream = cam2_bytes(product_image(), 0, 1, 10) + cam2_bytes(
+            product_image(True), 1, 2, 20
+        )
+        fake = FakeSerial(stream)
+        factory_calls = 0
+
+        def factory(_port: str, **_kwargs: object) -> FakeSerial:
+            nonlocal factory_calls
+            factory_calls += 1
+            return fake
+
+        source = UsbCameraSource(
+            "COM_TEST",
+            None,
+            serial_factory=factory,
+            clock=lambda: 5.0,
+        )
+        with source:
+            packets = source.poll()
+        self.assertEqual(factory_calls, 1)
+        self.assertEqual([packet.camera_id for packet in packets], ["0", "1"])
+        self.assertEqual(source.last_packet_at_by_camera, {0: 5.0, 1: 5.0})
+        self.assertEqual(source.stats.other_camera_frames, 0)
 
     def test_serial_disconnect_becomes_safe_error_and_closes(self) -> None:
         class DisconnectedSerial(FakeSerial):

@@ -23,6 +23,16 @@ def product_image(inverted: bool = False) -> np.ndarray:
     return image
 
 
+def left_edge_product(inverted: bool = False) -> np.ndarray:
+    image = np.full((240, 320, 3), 128, dtype=np.uint8)
+    fill = 30 if inverted else 225
+    ink = 240 if inverted else 15
+    cv2.rectangle(image, (2, 3), (59, 236), (fill, fill, fill), -1)
+    for y in range(15, 230, 18):
+        cv2.line(image, (7, y), (54, y), (ink, ink, ink), 3)
+    return image
+
+
 class RecognizerTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -66,6 +76,27 @@ class RecognizerTests(unittest.TestCase):
         self.assertTrue(Path(state["merged_path"]).is_file())
         self.assertIn(RecognitionState.MERGING, self.recognizer.state_history)
         self.assertIn(RecognitionState.RECOGNIZING, self.recognizer.state_history)
+
+    def test_off_center_product_automatically_captures_with_full_frame_roi(self) -> None:
+        self.assertEqual(self.config.roi_fraction, 1.0)
+        self.recognizer.config.rotation_threshold = 0.10
+        front = left_edge_product(False)
+        back = left_edge_product(True)
+        self.recognizer.start_recognition("cam-1")
+        for index, timestamp in enumerate((0.0, 0.1, 0.2, 0.4, 0.5)):
+            self.recognizer.process_frame(self.packet(front, index, timestamp))
+        self.assertEqual(self.recognizer.state, RecognitionState.WAIT_ROTATION)
+        rotation = self.recognizer.process_frame(self.packet(back, 10, 0.6))
+        self.assertEqual(rotation.reason, "rotation_detected")
+        for index, timestamp in enumerate((0.7, 0.8, 0.9, 1.1, 1.2), 11):
+            self.recognizer.process_frame(self.packet(back, index, timestamp))
+            if self.recognizer.state is RecognitionState.COMPLETED:
+                break
+        self.assertEqual(self.recognizer.state, RecognitionState.COMPLETED)
+        self.assertEqual(self.mock.calls, 1)
+        self.assertTrue(self.recognizer.front_path and self.recognizer.front_path.is_file())
+        self.assertTrue(self.recognizer.back_path and self.recognizer.back_path.is_file())
+        self.assertTrue(self.recognizer.merged_path and self.recognizer.merged_path.is_file())
 
     def test_duplicate_manual_back_is_rejected(self) -> None:
         front = product_image(False)

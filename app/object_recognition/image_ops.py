@@ -74,12 +74,12 @@ def normalized_difference(first: np.ndarray, second: np.ndarray) -> float:
     return float(np.mean(cv2.absdiff(first, second)) / 255.0)
 
 
-def sharpness_score(image: np.ndarray, roi_fraction: float = 0.60) -> float:
+def sharpness_score(image: np.ndarray, roi_fraction: float = 1.0) -> float:
     gray = cv2.cvtColor(central_roi(image, roi_fraction), cv2.COLOR_BGR2GRAY)
     return float(cv2.Laplacian(gray, cv2.CV_64F).var())
 
 
-def brightness_score(image: np.ndarray, roi_fraction: float = 0.60) -> float:
+def brightness_score(image: np.ndarray, roi_fraction: float = 1.0) -> float:
     gray = cv2.cvtColor(central_roi(image, roi_fraction), cv2.COLOR_BGR2GRAY)
     return float(np.mean(gray))
 

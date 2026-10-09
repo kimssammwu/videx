@@ -7,6 +7,7 @@ import numpy as np
 
 from object_recognition.image_ops import (
     analysis_gray,
+    brightness_score,
     decode_image,
     encode_jpeg,
     merge_side_by_side,
@@ -43,6 +44,40 @@ class ImageOpsTests(unittest.TestCase):
         before = analysis_gray(first, 0.6, 160)
         after = analysis_gray(changed_border, 0.6, 160)
         self.assertEqual(normalized_difference(before, after), 0)
+
+    def test_full_frame_analysis_includes_border_motion(self) -> None:
+        first = np.full((200, 300, 3), 100, dtype=np.uint8)
+        changed_border = first.copy()
+        changed_border[:30, :] = 255
+        changed_border[-30:, :] = 0
+        before = analysis_gray(first, 1.0, 160)
+        after = analysis_gray(changed_border, 1.0, 160)
+        self.assertGreater(normalized_difference(before, after), 0.05)
+
+    def test_default_quality_scores_include_products_at_all_four_edges(self) -> None:
+        height, width = 240, 320
+        regions = {
+            "left": (3, 70, 58, 170),
+            "right": (262, 70, 317, 170),
+            "top": (110, 3, 210, 43),
+            "bottom": (110, 197, 210, 237),
+        }
+        for name, (left, top, right, bottom) in regions.items():
+            with self.subTest(position=name):
+                image = np.full((height, width, 3), 128, dtype=np.uint8)
+                cv2.rectangle(image, (left, top), (right, bottom), (235, 235, 235), -1)
+                for offset in range(5, max(6, right - left), 9):
+                    x = min(right - 2, left + offset)
+                    cv2.line(image, (x, top + 2), (x, bottom - 2), (20, 20, 20), 2)
+                self.assertGreater(sharpness_score(image), 1.0)
+
+        left_image = np.full((height, width, 3), 128, dtype=np.uint8)
+        cv2.rectangle(left_image, (3, 70), (58, 170), (235, 235, 235), -1)
+        cv2.line(left_image, (20, 72), (20, 168), (20, 20, 20), 3)
+        self.assertEqual(sharpness_score(left_image, 0.60), 0.0)
+        self.assertNotAlmostEqual(
+            brightness_score(left_image), brightness_score(left_image, 0.60), places=1
+        )
 
     def test_merge_preserves_order_and_aspect_ratio(self) -> None:
         front = np.full((200, 100, 3), (0, 0, 255), dtype=np.uint8)

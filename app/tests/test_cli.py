@@ -11,7 +11,13 @@ from object_recognition.api import (
     HttpVisionClient,
     MockVisionClient,
 )
-from object_recognition.cli import _build_vision_client, _parser, _run_usb, _usb_camera_id, main
+from object_recognition.cli import (
+    _build_vision_client,
+    _parser,
+    _run_usb,
+    _usb_camera_id,
+    main,
+)
 from object_recognition.models import RecognitionState
 
 
@@ -44,16 +50,49 @@ class CliTests(unittest.TestCase):
 
     def test_usb_source_is_mutually_exclusive_and_camera_is_validated(self) -> None:
         parser = _parser()
-        args = parser.parse_args(["--usb-port", "COM5", "--camera-id", "1"])
+        args = parser.parse_args(["--usb-port", "COM5", "--camera-id", "0"])
         self.assertEqual(args.usb_port, "COM5")
-        self.assertEqual(_usb_camera_id(args), 1)
+        self.assertEqual(_usb_camera_id(args), 0)
         default_args = parser.parse_args(["--usb-port", "COM5"])
         self.assertEqual(_usb_camera_id(default_args), 0)
-        invalid_args = parser.parse_args(["--usb-port", "COM5", "--camera-id", "2"])
+        invalid_args = parser.parse_args(["--usb-port", "COM5", "--camera-id", "1"])
         with self.assertRaises(ValueError):
             _usb_camera_id(invalid_args)
         with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
             parser.parse_args(["--usb-port", "COM5", "--video", "sample.mp4"])
+
+    def test_dual_camera_requires_usb_but_does_not_require_camera_id(self) -> None:
+        args = _parser().parse_args(["--usb-port", "COM5", "--dual-camera"])
+        self.assertTrue(args.dual_camera)
+        with self.assertLogs(level="ERROR") as logs:
+            exit_code = main(
+                ["--manual-pair", "front.jpg", "back.jpg", "--dual-camera"]
+            )
+        self.assertEqual(exit_code, 2)
+        self.assertIn("--usb-port", "\n".join(logs.output))
+
+    def test_preview_option_and_stability_tuning_are_available(self) -> None:
+        args = _parser().parse_args(
+            [
+                "--usb-port",
+                "COM5",
+                "--preview",
+                "--motion-threshold",
+                "0.04",
+                "--motion-reset-threshold",
+                "0.10",
+                "--stable-ratio",
+                "0.8",
+            ]
+        )
+        self.assertTrue(args.preview)
+        self.assertEqual(args.camera_id, "0")
+        self.assertEqual(args.motion_threshold, 0.04)
+
+    def test_product_recognition_has_no_runtime_resolution_option(self) -> None:
+        parser = _parser()
+        with redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+            parser.parse_args(["--usb-port", "COM5", "--resolution", "2"])
 
     def test_usb_empty_poll_drives_recognizer_timeout_tick_and_closes(self) -> None:
         args = _parser().parse_args(["--usb-port", "COM5"])
