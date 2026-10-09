@@ -2,6 +2,7 @@
 """Display CAM2 JPEG frames from the ESP32-S3 native USB CDC port."""
 
 import argparse
+from collections import deque
 from dataclasses import dataclass
 import logging
 import struct
@@ -112,6 +113,45 @@ class FrameParser:
         return frames
 
 
+class ButtonEvents:
+    """Turn repeated firmware metadata (or legacy raw levels) into presses."""
+
+    def __init__(self):
+        self.pressed = None
+        self.result = None
+        self.down_at = None
+        self.armed = False
+
+    def observe(self, frame, now):
+        if frame.camera_id != 0 or frame.paused:
+            return None
+        pressed = frame.button_pressed
+        if pressed is None:
+            self.pressed, self.armed, self.down_at = None, False, None
+            return None
+        if self.pressed is None:
+            # Establish a baseline; reconnecting while held is not a new press.
+            self.pressed = pressed
+            return None
+        if pressed and self.pressed is False:
+            self.down_at = now
+            self.armed = True
+        event = None
+        if frame.button_classified:
+            # Firmware carries LAST result throughout the next press. The result
+            # on its debounced release is unambiguous, including SHORT→SHORT and
+            # LONG→SHORT. Emit once per observed press/release, never on stale data.
+            if self.armed and not pressed and self.pressed and frame.button_result:
+                event = frame.button_result
+        elif self.armed and pressed is False and self.pressed and self.down_at is not None:
+            event = "LONG" if now - self.down_at >= 1.0 else "SHORT"
+        if not pressed:
+            self.armed = False
+        if pressed is not None:
+            self.pressed = pressed
+        return event
+
+
 def receive_frames(port, baudrate, stop, latest, lock, serial, cv2, np, control):
     """Keep serial reads and JPEG decoding off the GUI thread."""
     while not stop.is_set():
@@ -119,6 +159,12 @@ def receive_frames(port, baudrate, stop, latest, lock, serial, cv2, np, control)
             with serial.Serial(port, baudrate=baudrate, timeout=0.1, write_timeout=0.5) as connection:
                 logging.info("USB connected: %s", port)
                 parser = FrameParser()
+                buttons = ButtonEvents()
+                with lock:
+                    latest.clear()
+                    control["connected"] = True
+                    control["status"] = "USB connected: " + port
+                    control["epoch"] = control.get("epoch", 0) + 1
                 sent_mode = None
                 while not stop.is_set():
                     with lock:
@@ -141,15 +187,22 @@ def receive_frames(port, baudrate, stop, latest, lock, serial, cv2, np, control)
                                                 frame.camera_id, frame.frame_id)
                                 continue
                         with lock:
+                            event = buttons.observe(frame, received_at)
+                            if event:
+                                control.setdefault("button_events", deque(maxlen=32)).append((event, received_at))
                             latest[frame.camera_id] = (image, frame.frame_id, received_at,
                                                       frame.button_pressed, frame.button_classified,
                                                       frame.button_result, frame.paused)
         except (serial.SerialException, OSError) as error:
+            with lock:
+                latest.clear()
+                control["connected"] = False
+                control["status"] = "USB unavailable: " + str(error)
             logging.warning("USB unavailable: %s; retrying in 1 second", error)
             stop.wait(1.0)
 
 
-def main():
+def legacy_main():
     args_parser = argparse.ArgumentParser(description=__doc__)
     args_parser.add_argument("--port", help="Native USB port, e.g. /dev/ttyACM0 or COM5")
     args_parser.add_argument("--list-ports", action="store_true", help="List ports and exit")
@@ -247,5 +300,21 @@ def main():
         cv2.destroyAllWindows()
 
 
+def main(argv=None):
+    """The default entry point is the integrated, native Python desktop app."""
+    try:
+        if __package__:
+            from .desktop import main as desktop_main
+        else:
+            from pathlib import Path
+            import sys
+            sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+            from proxy.desktop import main as desktop_main
+    except ImportError as exc:
+        print(f"Missing dependency: {exc}\nInstall: python -m pip install -r proxy/requirements-desktop.txt")
+        return 1
+    return desktop_main(argv)
+
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
