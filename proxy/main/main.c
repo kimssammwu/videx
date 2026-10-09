@@ -8,6 +8,7 @@
 #include <unistd.h>
 
 #include "sdkconfig.h"
+#include "button.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/queue.h"
 #include "freertos/task.h"
@@ -23,22 +24,26 @@
 #include "lwip/sockets.h"
 #include "lwip/tcp.h"
 
-/* Matches cam/main/main.c. PC reads <IB3xIIHHQ, then jpeg_size bytes.
+/* Matches cam/main/main.c on TCP. USB uses <IBBBBIIHHQ, then JPEG.
+ * S3 debounces/classifies LEFT input and fills flags + button_result.
  * Native USB Serial/JTAG exposes CDC ACM on GPIO19 (D-) / GPIO20 (D+).
  * Use the board's native USB connector, not its USB-to-UART connector.
  * PC must resynchronize on CAM2 + a valid header after reopening USB or
  * a transfer timeout. Camera timestamps are local, not synchronized clocks.
  */
-#define WIFI_SSID "CAM_RECEIVER"
+#define WIFI_SSID "CAM_RECEIVER2"
 #define WIFI_PASSWORD "12345678"
 #define WIFI_CHANNEL 6
 #define SERVER_PORT 5000
 #define CAMERA_COUNT 2
 #define FRAME_MAGIC UINT32_C(0x324D4143)
+#define FRAME_FLAG_STREAM_PAUSED (1U << 3)
 #define MAX_JPEG_SIZE (1024U * 1024U)
+#define MAX_FRAME_DIMENSION 4096U
 #define FRAME_TIMEOUT_US INT64_C(5000000)
 #define HEADER_TIMEOUT_US INT64_C(15000000)
 #define STATS_INTERVAL_US INT64_C(5000000)
+#define BUTTON_STREAM_GAP_US INT64_C(2000000)
 
 #if !CONFIG_IDF_TARGET_ESP32S3
 #error "Build this proxy with idf.py set-target esp32s3"
@@ -50,7 +55,9 @@
 typedef struct __attribute__((packed)) {
     uint32_t magic;
     uint8_t camera_id;
-    uint8_t reserved[3];
+    uint8_t flags;
+    uint8_t button_result; /* TCP: reserved zero; USB: last SHORT/LONG result. */
+    uint8_t reserved;
     uint32_t frame_id;
     uint32_t jpeg_size;
     uint16_t width;
@@ -73,6 +80,39 @@ static const char *TAG = "proxy";
 static receiver_t receivers[CAMERA_COUNT];
 static QueueHandle_t available_receivers;
 static QueueHandle_t output_frames;
+static portMUX_TYPE resolution_lock = portMUX_INITIALIZER_UNLOCKED;
+static uint8_t requested_resolution = 0;
+
+static uint8_t get_resolution(void)
+{
+    portENTER_CRITICAL(&resolution_lock);
+    uint8_t mode = requested_resolution;
+    portEXIT_CRITICAL(&resolution_lock);
+    return mode;
+}
+
+static void usb_command_task(void *arg)
+{
+    (void)arg;
+    uint8_t commands[32];
+    for (;;) {
+        int count = usb_serial_jtag_read_bytes(commands, sizeof(commands), pdMS_TO_TICKS(100));
+        for (int i = 0; i < count; ++i) {
+            uint8_t mode = commands[i];
+            if (mode >= '0' && mode <= '2') {
+                mode -= '0';
+            }
+            if (mode > 2) {
+                continue;
+            }
+            portENTER_CRITICAL(&resolution_lock);
+            requested_resolution = mode;
+            portEXIT_CRITICAL(&resolution_lock);
+            ESP_LOGI(TAG, "Resolution requested: mode=%u (0=both 320, 1=LEFT 640, 2=LEFT 1280)",
+                     (unsigned)mode);
+        }
+    }
+}
 
 static void wifi_event_handler(void *arg, esp_event_base_t base,
                                int32_t id, void *data)
@@ -148,11 +188,20 @@ static bool receive_exact(int sock, void *buffer, size_t length, int64_t deadlin
 
 static bool valid_header(const frame_header_t *h)
 {
+    if (h->magic == FRAME_MAGIC && h->camera_id == 1 &&
+        h->flags == FRAME_FLAG_STREAM_PAUSED && h->button_result == 0 &&
+        h->reserved == 0 && h->jpeg_size == 0 && h->width == 0 && h->height == 0) {
+        return true; /* RIGHT pause heartbeat: header only, no JPEG allocation. */
+    }
     return h->magic == FRAME_MAGIC && h->camera_id < CAMERA_COUNT &&
-           h->reserved[0] == 0 && h->reserved[1] == 0 && h->reserved[2] == 0 &&
+           h->button_result == 0 && h->reserved == 0 &&
+           (h->flags == 0 ||
+            (h->camera_id == 0 &&
+             (h->flags == FRAME_FLAG_BUTTON_VALID ||
+              h->flags == (FRAME_FLAG_BUTTON_VALID | FRAME_FLAG_BUTTON_PRESSED)))) &&
            h->jpeg_size >= 4 && h->jpeg_size <= MAX_JPEG_SIZE &&
-           h->width > 0 && h->width <= 2000 &&
-           h->height > 0 && h->height <= 2000;
+           h->width > 0 && h->width <= MAX_FRAME_DIMENSION &&
+           h->height > 0 && h->height <= MAX_FRAME_DIMENSION;
 }
 
 static void receiver_task(void *arg)
@@ -162,10 +211,21 @@ static void receiver_task(void *arg)
         int sock;
         xQueueReceive(receiver->sockets, &sock, portMAX_DELAY);
         int camera_id = -1;
+        int sent_resolution = -1;
+        button_state_t button = {0}; /* Reset for each camera TCP connection. */
+        int64_t last_left_at = 0;
         uint32_t received = 0;
         uint32_t dropped = 0;
         int64_t stats_start = esp_timer_get_time();
         for (;;) {
+            uint8_t mode = get_resolution();
+            if (sent_resolution != mode) {
+                /* Opposite TCP direction carries only one-byte controls. */
+                if (send(sock, &mode, sizeof(mode), 0) != sizeof(mode)) {
+                    break;
+                }
+                sent_resolution = mode;
+            }
             frame_t frame = {0};
             if (!receive_exact(sock, &frame.header, sizeof(frame.header),
                                esp_timer_get_time() + HEADER_TIMEOUT_US)) {
@@ -177,6 +237,12 @@ static void receiver_task(void *arg)
                 break; /* Reconnect instead of guessing the TCP frame boundary. */
             }
             camera_id = frame.header.camera_id;
+            if (frame.header.flags == FRAME_FLAG_STREAM_PAUSED) {
+                if (xQueueSend(output_frames, &frame, 0) != pdTRUE) {
+                    ++dropped;
+                }
+                continue;
+            }
             frame.jpeg = heap_caps_malloc(frame.header.jpeg_size,
                                           MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
             if (frame.jpeg == NULL) {
@@ -200,13 +266,35 @@ static void receiver_task(void *arg)
                 break;
             }
             ++received;
+            if (camera_id == 1 && get_resolution() > 0) {
+                /* Discard old in-flight RIGHT images while the pause command arrives. */
+                free(frame.jpeg);
+                ++dropped;
+                continue;
+            }
+            int64_t now = esp_timer_get_time(); /* Also used for existing stats. */
+            if (camera_id == 0) {
+                if (last_left_at != 0 && now - last_left_at > BUTTON_STREAM_GAP_US) {
+                    button_reset(&button);
+                }
+                last_left_at = now;
+                uint8_t event = button_update(&button,
+                    (frame.header.flags & FRAME_FLAG_BUTTON_VALID) != 0,
+                    (frame.header.flags & FRAME_FLAG_BUTTON_PRESSED) != 0);
+                frame.header.flags = button_output_flags(&button);
+                frame.header.button_result = button.last_result;
+                if (event != BUTTON_RESULT_NONE) {
+                    ESP_LOGI(TAG, "LEFT button: %s (frame %" PRIu32 ")",
+                             event == BUTTON_RESULT_LONG ? "LONG" : "SHORT",
+                             frame.header.frame_id);
+                }
+            }
             /* Ownership passes to the sole USB writer. A bounded queue avoids
              * unbounded memory growth when the PC stops reading. */
             if (xQueueSend(output_frames, &frame, 0) != pdTRUE) {
                 free(frame.jpeg);
                 ++dropped;
             }
-            int64_t now = esp_timer_get_time();
             if (now - stats_start >= STATS_INTERVAL_US) {
                 ESP_LOGI(TAG, "Camera %d: RX %.1f fps, dropped=%" PRIu32,
                          camera_id, received * 1000000.0 / (now - stats_start), dropped);
@@ -248,6 +336,11 @@ static void usb_sender_task(void *arg)
     for (;;) {
         frame_t frame;
         xQueueReceive(output_frames, &frame, portMAX_DELAY);
+        if (frame.header.camera_id == 1 && frame.header.jpeg_size > 0 &&
+            get_resolution() > 0) {
+            free(frame.jpeg);
+            continue;
+        }
         if (usb_serial_jtag_is_connected()) {
             int64_t deadline = esp_timer_get_time() + FRAME_TIMEOUT_US;
             bool sent = usb_write_all(&frame.header, sizeof(frame.header), deadline) &&
@@ -295,6 +388,7 @@ static void tcp_server_task(void *arg)
             const struct timeval timeout = {.tv_sec = 1};
             unsigned index;
             if (setsockopt(sock, SOL_SOCKET, SO_RCVTIMEO, &timeout, sizeof(timeout)) < 0 ||
+                setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &timeout, sizeof(timeout)) < 0 ||
                 setsockopt(sock, IPPROTO_TCP, TCP_NODELAY, &enabled, sizeof(enabled)) < 0) {
                 close(sock);
                 continue;
@@ -340,6 +434,7 @@ void app_main(void)
         xQueueSend(available_receivers, &i, portMAX_DELAY);
     }
     if (xTaskCreate(usb_sender_task, "usb_tx", 4096, NULL, 5, NULL) != pdPASS ||
+        xTaskCreate(usb_command_task, "usb_commands", 3072, NULL, 5, NULL) != pdPASS ||
         xTaskCreate(tcp_server_task, "tcp_server", 4096, NULL, 4, NULL) != pdPASS) {
         abort();
     }

@@ -1,3 +1,4 @@
 {
-    "idf.currentSetup": "/home/wonyj/.espressif/v5.5.4/esp-idf"
+    "idf.currentSetup": "/home/wonyj/.espressif/v5.5.4/esp-idf",
+    "idf.port": "/dev/ttyUSB0"
 }
