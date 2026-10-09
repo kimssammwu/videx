@@ -1,0 +1,3 @@
+# Core detector (no serial dependency). Python 3.10+.
+numpy>=1.24
+opencv-python>=4.8

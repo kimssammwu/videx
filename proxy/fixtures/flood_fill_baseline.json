@@ -1,0 +1,604 @@
+{
+  "source": "Original demonstrated flood_fill_mvp.py, captured before refactor",
+  "opencv": "5.0.0",
+  "decisions": {
+    "clear": {
+      "state": "MONITORING",
+      "reason": "below warning thresholds (not proof of a clear path)",
+      "updated": true,
+      "frame_id": 0,
+      "hits": 0,
+      "clears": 1,
+      "processed": 1,
+      "total": 0.0,
+      "central": 0.0,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 0,
+        "filled": 23760,
+        "unfilled": 0
+      }
+    },
+    "outside_roi": {
+      "state": "MONITORING",
+      "reason": "below warning thresholds (not proof of a clear path)",
+      "updated": true,
+      "frame_id": 1,
+      "hits": 0,
+      "clears": 2,
+      "processed": 2,
+      "total": 0.0,
+      "central": 0.0,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 605,
+        "filled": 23760,
+        "unfilled": 0
+      }
+    },
+    "candidate_1": {
+      "state": "MONITORING",
+      "reason": "candidate; waiting for consecutive NEW frames",
+      "updated": true,
+      "frame_id": 2,
+      "hits": 1,
+      "clears": 0,
+      "processed": 3,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "duplicate": {
+      "state": "MONITORING",
+      "reason": "candidate; waiting for consecutive NEW frames",
+      "updated": false,
+      "frame_id": 2,
+      "hits": 1,
+      "clears": 0,
+      "processed": 3,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "candidate_2": {
+      "state": "MONITORING",
+      "reason": "candidate; waiting for consecutive NEW frames",
+      "updated": true,
+      "frame_id": 3,
+      "hits": 2,
+      "clears": 0,
+      "processed": 4,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "warning": {
+      "state": "WARNING",
+      "reason": "both thresholds exceeded on consecutive NEW frames",
+      "updated": true,
+      "frame_id": 4,
+      "hits": 3,
+      "clears": 0,
+      "processed": 5,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "clear_1_hold": {
+      "state": "WARNING",
+      "reason": "warning held; waiting for consecutive clear frames",
+      "updated": true,
+      "frame_id": 5,
+      "hits": 0,
+      "clears": 1,
+      "processed": 6,
+      "total": 0.0,
+      "central": 0.0,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 0,
+        "filled": 23760,
+        "unfilled": 0
+      }
+    },
+    "clear_2_hold": {
+      "state": "WARNING",
+      "reason": "warning held; waiting for consecutive clear frames",
+      "updated": true,
+      "frame_id": 6,
+      "hits": 0,
+      "clears": 2,
+      "processed": 7,
+      "total": 0.0,
+      "central": 0.0,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 0,
+        "filled": 23760,
+        "unfilled": 0
+      }
+    },
+    "clear_3_release": {
+      "state": "MONITORING",
+      "reason": "below warning thresholds (not proof of a clear path)",
+      "updated": true,
+      "frame_id": 7,
+      "hits": 0,
+      "clears": 3,
+      "processed": 8,
+      "total": 0.0,
+      "central": 0.0,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 0,
+        "filled": 23760,
+        "unfilled": 0
+      }
+    },
+    "warning_again_8": {
+      "state": "MONITORING",
+      "reason": "candidate; waiting for consecutive NEW frames",
+      "updated": true,
+      "frame_id": 8,
+      "hits": 1,
+      "clears": 0,
+      "processed": 9,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "warning_again_9": {
+      "state": "MONITORING",
+      "reason": "candidate; waiting for consecutive NEW frames",
+      "updated": true,
+      "frame_id": 9,
+      "hits": 2,
+      "clears": 0,
+      "processed": 10,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "warning_again_10": {
+      "state": "WARNING",
+      "reason": "both thresholds exceeded on consecutive NEW frames",
+      "updated": true,
+      "frame_id": 10,
+      "hits": 3,
+      "clears": 0,
+      "processed": 11,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "duplicate_timeout": {
+      "state": "UNKNOWN",
+      "reason": "no NEW LEFT frame for 2.0s",
+      "updated": false,
+      "frame_id": 10,
+      "hits": 0,
+      "clears": 0,
+      "processed": 11,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "recovery_1": {
+      "state": "MONITORING",
+      "reason": "candidate; waiting for consecutive NEW frames",
+      "updated": true,
+      "frame_id": 11,
+      "hits": 1,
+      "clears": 0,
+      "processed": 12,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "recovery_2": {
+      "state": "MONITORING",
+      "reason": "candidate; waiting for consecutive NEW frames",
+      "updated": true,
+      "frame_id": 12,
+      "hits": 2,
+      "clears": 0,
+      "processed": 13,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "recovery_3": {
+      "state": "WARNING",
+      "reason": "both thresholds exceeded on consecutive NEW frames",
+      "updated": true,
+      "frame_id": 13,
+      "hits": 3,
+      "clears": 0,
+      "processed": 14,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "counter_restart": {
+      "state": "MONITORING",
+      "reason": "candidate; waiting for consecutive NEW frames",
+      "updated": true,
+      "frame_id": 0,
+      "hits": 1,
+      "clears": 0,
+      "processed": 15,
+      "total": 0.3327861952861953,
+      "central": 0.7734375,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 1034,
+        "filled": 15853,
+        "unfilled": 7907
+      }
+    },
+    "larger_frame": {
+      "state": "MONITORING",
+      "reason": "candidate; waiting for consecutive NEW frames",
+      "updated": true,
+      "frame_id": 1,
+      "hits": 2,
+      "clears": 0,
+      "processed": 16,
+      "total": 0.3210366173538978,
+      "central": 0.76171875,
+      "seed": [
+        240,
+        602
+      ],
+      "shape": [
+        640,
+        480
+      ],
+      "mask_counts": {
+        "roi": 95310,
+        "center": 19456,
+        "barriers": 2072,
+        "filled": 64712,
+        "unfilled": 30598
+      }
+    },
+    "landscape_frame": {
+      "state": "WARNING",
+      "reason": "both thresholds exceeded on consecutive NEW frames",
+      "updated": true,
+      "frame_id": 2,
+      "hits": 3,
+      "clears": 0,
+      "processed": 17,
+      "total": 0.33061704540681314,
+      "central": 0.78125,
+      "seed": [
+        160,
+        226
+      ],
+      "shape": [
+        240,
+        320
+      ],
+      "mask_counts": {
+        "roi": 23807,
+        "center": 4992,
+        "barriers": 1042,
+        "filled": 15936,
+        "unfilled": 7871
+      }
+    },
+    "dark": {
+      "state": "UNKNOWN",
+      "reason": "ROI too dark / lens covered",
+      "updated": true,
+      "frame_id": 3,
+      "hits": 0,
+      "clears": 0,
+      "processed": 18,
+      "total": 0.0,
+      "central": 0.0,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 0,
+        "filled": 23760,
+        "unfilled": 0
+      }
+    },
+    "bright": {
+      "state": "UNKNOWN",
+      "reason": "ROI overexposed",
+      "updated": true,
+      "frame_id": 4,
+      "hits": 0,
+      "clears": 0,
+      "processed": 19,
+      "total": 0.0,
+      "central": 0.0,
+      "seed": [
+        120,
+        301
+      ],
+      "shape": [
+        320,
+        240
+      ],
+      "mask_counts": {
+        "roi": 23760,
+        "center": 4864,
+        "barriers": 0,
+        "filled": 23760,
+        "unfilled": 0
+      }
+    },
+    "too_small": {
+      "state": "UNKNOWN",
+      "reason": "image too small",
+      "updated": true,
+      "frame_id": 5,
+      "hits": 0,
+      "clears": 0,
+      "processed": 20,
+      "total": 0.0,
+      "central": 0.0,
+      "seed": [
+        8,
+        14
+      ],
+      "shape": [
+        16,
+        16
+      ],
+      "mask_counts": {
+        "roi": 100,
+        "center": 14,
+        "barriers": 0,
+        "filled": 100,
+        "unfilled": 0
+      }
+    },
+    "stale_arrival": {
+      "state": "UNKNOWN",
+      "reason": "received frame is already stale",
+      "updated": false,
+      "frame_id": 5,
+      "hits": 0,
+      "clears": 0,
+      "processed": 20,
+      "total": 0.0,
+      "central": 0.0,
+      "seed": [
+        8,
+        14
+      ],
+      "shape": [
+        16,
+        16
+      ],
+      "mask_counts": {
+        "roi": 100,
+        "center": 14,
+        "barriers": 0,
+        "filled": 100,
+        "unfilled": 0
+      }
+    }
+  }
+}

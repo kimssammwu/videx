@@ -1,0 +1,13 @@
+# Python environments and caches (including the documented repository venv).
+.venv*/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
+# Local VIDEX captures, diagnostics and demo output; keep source fixtures.
+flood-results/
+mvp-results/
+flood_snapshot.png
